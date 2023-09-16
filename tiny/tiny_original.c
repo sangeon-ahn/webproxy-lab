@@ -188,7 +188,6 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
 
 void serve_static(int fd, char *filename, int filesize)
 {
-  printf("HI\n");
   // source fd
   int srcfd;
 
@@ -204,7 +203,7 @@ void serve_static(int fd, char *filename, int filesize)
   sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
   Rio_writen(fd, buf, strlen(buf));
   printf("Response headers:\n");
-  // printf("%s", buf);
+  printf("%s", buf);
 
   // 응답 바디를 클라이언트에게 보내기
 
@@ -213,10 +212,6 @@ void serve_static(int fd, char *filename, int filesize)
 
   // filesize만큼 메모리 할당해서 읽기전용 private read-only data에 srcfd 파일을 올리고, 시작위치는 srcp
   srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
-  // 일단 파일크기만큼 동적할당 해주기
-  // srcp = (char* )Malloc(filesize);
-  // 그리고 파일 데이터를 srcp에 복사해주기
-  // Rio_readn(srcfd, srcp, filesize);
 
   // 파일 식별자 닫고
   Close(srcfd);
@@ -226,9 +221,7 @@ void serve_static(int fd, char *filename, int filesize)
 
   // 복사 끝나면 메모리에서 파일할당 해제
   Munmap(srcp, filesize);
-  // Free(srcp);
 }
-
 
 void get_filetype(char *filename, char *filetype)
 {
@@ -243,9 +236,6 @@ void get_filetype(char *filename, char *filetype)
   }
   else if (strstr(filename, ".jpg")) {
     strcpy(filetype, "image/jpeg");
-  }
-  else if (strstr(filename, ".mp4")) {
-    strcpy(filetype, "video/mp4");
   }
   else {
     strcpy(filetype, "text/plain");

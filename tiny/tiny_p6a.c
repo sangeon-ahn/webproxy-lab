@@ -50,56 +50,13 @@ void doit(int fd)
   char filename[MAXLINE], cgiargs[MAXLINE];
   rio_t rio;
 
-  // request line과 request header 읽기
+  // 우선 rio 초기화시키기.
   Rio_readinitb(&rio, fd);
 
-  // request line 한 줄 읽기
-  Rio_readlineb(&rio, buf, MAXLINE);
-  printf("Request headers:\n");
-  // 요청헤더 다 출력
-  printf("%s", buf);
-
-  // buf는 "%s %s %s" 형태이고, 각각의 문자열은 method, uri, version에 넣는다.
-  sscanf(buf, "%s %s %s", method, uri, version);
-
-  // method와 "GET"를 대소문자 구분없이 비교해서 0이면 같은거, 0 아니면 다른거
-  if (strcasecmp(method, "GET")) {
-    // 다르면 아직 구현 안된 method라서 오류메시지 출력하고 리턴.
-    clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
-    return;
-  }
-
-  // 나머지 request header는 읽어버리고 무시함.
-  read_requesthdrs(&rio);
-
-  // GET 요청에서 URI를 파싱해서 filename, cgiargs에 넣어줌
-  is_static = parse_uri(uri, filename, cgiargs);
+  // request line과 header를 다 읽고 쓰기
+  echo_request(&rio, fd);
   
-  // 서버 컴퓨터에 filename이 있으면 stat 호출시 0 리턴하고, sbuf에 해당 파일의 메타데이터 정보가 담김.
-  if (stat(filename, &sbuf) < 0) {
-    // 0 리턴 안되면 에러메시지 + 리턴.
-    clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
-    return;
-  } 
-
-  // 파일 있으면 이제 정적 컨텐츠인지 확인
-  if (is_static) {
-    // 일반적인 파일이 아니거나 읽기권한이 없으면 에러
-    if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
-      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
-      return;
-    }
-    serve_static(fd, filename, sbuf.st_size);
-  }
-
-  // 동적 컨텐츠인 경우
-  else {
-    if (!S_ISREG(sbuf.st_mode) || !(S_IRUSR & sbuf.st_mode)) {
-      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
-      return;
-    }
-    serve_dynamic(fd, filename, cgiargs);
-  }
+  // read_requesthdrs(&rio);
 }
 
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
@@ -125,6 +82,40 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   Rio_writen(fd, buf, strlen(buf));
   // response body 보내준다.
   Rio_writen(fd, body, strlen(body));
+}
+
+void echo_request(rio_t *rp, int fd)
+{
+  char buf[MAXLINE];
+  char body[MAXLINE];
+  char header[MAXLINE];
+  // 밑 부분은 response body 부분이다.
+  // 일단 body 부분 만들기
+  // 일단 한줄 읽어들이기
+  Rio_readlineb(rp, buf, MAXLINE);
+  printf("%s", buf);
+  sprintf(body, "%s", buf);
+  
+  // 읽은게 \r\n 아니면 쓰고 더 읽기
+  while (strcmp(buf, "\r\n")) {
+    Rio_readlineb(rp, buf, MAXLINE);
+    sprintf(body, "%s%s", body, buf);
+    printf("%s", buf);
+  }
+  // 이제 request line + headers를 합친 body가 만들어졌다.
+  // response header 만들어서 보내자.
+  sprintf(header, "HTTP/1.0 200 OK\r\n");
+  sprintf(header, "%sServer: Tiny Web Server\r\n", header);
+  sprintf(header, "%sConnection: close\r\n", header);
+  sprintf(header, "%sContent-length: %d\r\n", header, strlen(body));
+  sprintf(header, "%sContent-type: %s\r\n\r\n", header, "text/plain");
+  Rio_writen(fd, header, strlen(header));
+  printf("Response headers:\n");
+  printf("%s", header);
+
+  // 이제 response body 보내기
+  Rio_writen(fd, body, strlen(body));
+  return;
 }
 
 void read_requesthdrs(rio_t *rp)
@@ -188,7 +179,6 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
 
 void serve_static(int fd, char *filename, int filesize)
 {
-  printf("HI\n");
   // source fd
   int srcfd;
 
@@ -204,7 +194,7 @@ void serve_static(int fd, char *filename, int filesize)
   sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
   Rio_writen(fd, buf, strlen(buf));
   printf("Response headers:\n");
-  // printf("%s", buf);
+  printf("%s", buf);
 
   // 응답 바디를 클라이언트에게 보내기
 
@@ -213,10 +203,6 @@ void serve_static(int fd, char *filename, int filesize)
 
   // filesize만큼 메모리 할당해서 읽기전용 private read-only data에 srcfd 파일을 올리고, 시작위치는 srcp
   srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
-  // 일단 파일크기만큼 동적할당 해주기
-  // srcp = (char* )Malloc(filesize);
-  // 그리고 파일 데이터를 srcp에 복사해주기
-  // Rio_readn(srcfd, srcp, filesize);
 
   // 파일 식별자 닫고
   Close(srcfd);
@@ -226,9 +212,7 @@ void serve_static(int fd, char *filename, int filesize)
 
   // 복사 끝나면 메모리에서 파일할당 해제
   Munmap(srcp, filesize);
-  // Free(srcp);
 }
-
 
 void get_filetype(char *filename, char *filetype)
 {
@@ -243,9 +227,6 @@ void get_filetype(char *filename, char *filetype)
   }
   else if (strstr(filename, ".jpg")) {
     strcpy(filetype, "image/jpeg");
-  }
-  else if (strstr(filename, ".mp4")) {
-    strcpy(filetype, "video/mp4");
   }
   else {
     strcpy(filetype, "text/plain");
