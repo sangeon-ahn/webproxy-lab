@@ -13,12 +13,12 @@ int main(void)
         // buf = "number1=10&number2=100"
         p = strchr(buf, '&');
         
-        char *n1 = buf + 8;
-        char *n2 = p + 9;
+        char *n1p = buf + 8;
+        char *n2p = p + 9;
         
         *p = '\0';
-        strcpy(arg1, n1);
-        strcpy(arg2, n2);
+        strcpy(arg1, n1p);
+        strcpy(arg2, n2p);
         
         n1 = atoi(arg1);
         n2 = atoi(arg2);

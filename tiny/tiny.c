@@ -204,7 +204,7 @@ void serve_static(int fd, char *filename, int filesize)
   sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
   Rio_writen(fd, buf, strlen(buf));
   printf("Response headers:\n");
-  // printf("%s", buf);
+  printf("%s", buf);
 
   // 응답 바디를 클라이언트에게 보내기
 
@@ -261,6 +261,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   Rio_writen(fd, buf, strlen(buf));
   sprintf(buf, "Server: Tiny Web Server\r\n");
   Rio_writen(fd, buf, strlen(buf));
+  printf("%s", cgiargs);
 
   // 자식 프로세스는 fork 반환값 = 0
   if (Fork() == 0) {
