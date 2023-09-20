@@ -2,19 +2,19 @@
 #include "csapp.h"
 #include "sbuf.h"
 /* Recommended max cache and object sizes */
-#define MAX_CACHE_SIZE 102401
+#define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
 #define SBUF_SIZE 50
 #define NTHREADS  10
 
 typedef struct {
   char uri[MAXLINE];
+  char response_header[MAXLINE];
   int hit_cnts;
-  size_t response_size;
+  size_t content_length;
+  char response_body[MAX_OBJECT_SIZE];
   struct Node* prev;
   struct Node* next;
-  char response_header[MAXLINE];
-  char response_body[MAX_OBJECT_SIZE];
 } Node;
 
 void doit(int fd);
@@ -24,13 +24,13 @@ void blank_response(int fd, char *buf);
 void* thread(void* vargp);
 Node* find_cached_obj(char* uri);
 void remove_node(Node* node);
-void insert_node(Node* node, size_t response_size);
+void insert_node(Node* node, size_t content_length);
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
     "Firefox/10.0.3\r\n";
-size_t cache_usage = 0;
+size_t current_cache_size = 0;
 sbuf_t sbuf;
 sem_t mutex;
 Node* head;
@@ -110,7 +110,7 @@ void doit(int fd)
       clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
       return;
   }
-  P(&mutex);
+  // P(&mutex);
   Node* p = find_cached_obj(uri);
   
   // 캐시된게 있을 때,
@@ -118,16 +118,17 @@ void doit(int fd)
     printf("캐시를 전달했습니다.\n");
     // 캐시된거 브라우저에 보내고,
     Rio_writen(fd, p->response_header, strlen(p->response_header));
-    Rio_writen(fd, p->response_body, p->response_size - strlen(p->response_header));
+    Rio_writen(fd, p->response_body, strlen(p->response_body));
 
     // 여기서부터 캐시 write
     // 캐시히트 1 증가시키고,
-    p->hit_cnts = 1;
+    (p->hit_cnts)++;
     // 해당 노드 떼어내서 맨 앞으로 보내기
     remove_node(p);
-    insert_node(p, p->response_size);
+    insert_node(p, strlen(p->response_body));
+
   }
-  V(&mutex);
+  // V(&mutex);
 
   // 캐시된게 없을 때,
   if (p == NULL) {
@@ -181,19 +182,14 @@ void doit(int fd)
     Rio_readlineb(&rio2, buf, MAXLINE);
     sprintf(header, buf);
 
+    size_t content_length = strlen(header);
     size_t n;
-    size_t response_header_size;
-    char content_length[MAXLINE];
     // 응답헤더 계속 받는 부분
     while (strcmp(buf, "\r\n")) {
       n = Rio_readlineb(&rio2, buf, MAXLINE);
+      content_length += n;
       sprintf(header, "%s%s", header, buf);
-
-      if (strstr(buf, "Content-Length: ")) {
-        sscanf(buf, "Content-Length: %s", content_length);
-      }
     }
-    response_header_size = strlen(header);
 
     // 일단 응답헤더 출력해보기
     printf("response-header:\n");
@@ -201,24 +197,19 @@ void doit(int fd)
 
     // 응답 바디 읽기
     char body[MAX_OBJECT_SIZE];
-    char response[MAX_OBJECT_SIZE];
+    Rio_readnb(&rio2, body, MAX_OBJECT_SIZE);
 
-    // 응답 헤더 브라우저에 보내기
-    Rio_writen(fd, header, strlen(header));
-    Rio_readnb(&rio2, body, atoi(content_length));
-
-    Rio_writen(fd, body, atoi(content_length));
-  
-    // strncpy(response, body, atoi(content_length));
     // while ((n = Rio_readlineb(&rio2, buf, MAXLINE)) != 0) {
-    //   response_body_size += n;
-    //   Rio_writen(fd, buf, n);
+    //   printf("%d바이트 받음\n", n);
+    //   printf("%s\n", buf);
     //   sprintf(body, "%s%s", body, buf);
     // }
 
+    // 응답 헤더 브라우저에 보내기
+    Rio_writen(fd, header, strlen(header));
 
     // 응답 바디 브라우저에 보내기
-    // Rio_writen(fd, body, strlen(body));
+    Rio_writen(fd, body, strlen(body));
 
     // 다했으면 프록시-웹서버간 연결 끊기
     Close(clientfd);
@@ -226,11 +217,11 @@ void doit(int fd)
     // 캐시 write 연산 -> 동기화
     // 캐시 만들지 말지 판단
     // 일단 MAX_OBJECT_SIZE 102400 이것보다 크면 패스
-    P(&mutex);
-    if (atoi(content_length) + response_header_size <= MAX_OBJECT_SIZE) {
+    // P(&mutex);
+    if (content_length <= MAX_OBJECT_SIZE) {
       // MAX_OBJECT_SIZE보다 같거나 작으면 넣어야 함.
       // 넣을 수 있을 때까지 제거
-      while (cache_usage + atoi(content_length) + response_header_size > MAX_CACHE_SIZE) {
+      while (current_cache_size + content_length > MAX_CACHE_SIZE) {
         remove_back_node();
       }
       // object 구조체 만들기
@@ -238,16 +229,16 @@ void doit(int fd)
 
       strcpy(node->uri, uri); // uri 복사
       node->hit_cnts = 0; // 캐시히트 0
-      node->response_size = atoi(content_length) + response_header_size;
+      node->content_length = content_length;
       strcpy(node->response_header, header); // 응답헤더 복사
 
       // 응답바디 동적할당 후 복사
-      memcpy(node->response_body, body, atoi(content_length));
+      printf("Content_Length:%d", content_length);
+      strcpy(node->response_body, body);
 
-      insert_node(node, atoi(content_length) + response_header_size); // node 캐시에 추가
-      cache_usage += atoi(content_length) + response_header_size;
+      insert_node(node, content_length); // node 캐시에 추가
     }
-    V(&mutex);
+    // V(&mutex);
   }
 }
 
@@ -346,7 +337,7 @@ void remove_node(Node* node) {
 }
 
 // 동기화 필요
-void insert_node(Node* node, size_t response_size) {
+void insert_node(Node* node, size_t content_length) {
   // 맨 앞에 추가
   // head - A 
   // head - node - A
@@ -355,6 +346,7 @@ void insert_node(Node* node, size_t response_size) {
   node->prev = head;
   node->next = first;
   first->prev = node;
+  current_cache_size += content_length;
 }
 
 // 동기화 필요
@@ -362,6 +354,6 @@ void remove_back_node() {
   // tail쪽 노드 1개 지우기
   Node* temp = tail->prev;
   remove_node(temp);
-  cache_usage -= temp->response_size;
+  current_cache_size -= temp->content_length;
   free(temp);
 }
